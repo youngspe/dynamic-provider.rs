@@ -6,9 +6,20 @@ use crate::{
     Lt, Query,
 };
 
+/// Provides access to values of arbitrary type.
+///
+/// Requested values are specified using a [`TypeTag`] implementation, or to be more specific, a [`TagFor<LTail>`]
+/// implementation.
 pub trait Provide<'x, LTail: Lt = ()>: Sized {
+    /// Supplies the requested value to the given [`Query`], if available.
+    ///
+    /// Implementations are expected to return `Some(self)` if the query was not fulfilled.
     fn provide(self, query: &mut Query<'_, 'x, LTail>) -> Option<Self>;
 
+    /// Requests the value specified by `Tag`. Returns `Err(self)` if the value was not available.
+    ///
+    /// `arg` should contain whatever data is needed to request the tagged type.
+    /// If no arguments are necessary, this will usually be the unit type `()`.
     fn request<Tag: TagFor<LTail>>(self, arg: Tag::ArgValue<'x>) -> Result<Tag::Value<'x>, Self> {
         match with_query::<Tag, LTail, _>(|q| self.provide(q), arg) {
             (_, Some(value)) => Ok(value),
@@ -17,15 +28,21 @@ pub trait Provide<'x, LTail: Lt = ()>: Sized {
         }
     }
 
+    /// Requests a value of type `T`, marked by the tag [`Value<T>`].
+    /// Values of type `T` must not hold any borrowed data.
     fn request_value<T: 'static>(self) -> Result<T, Self> {
         self.request::<Value<T>>(())
     }
 
-    fn request_ref<T: 'static>(self) -> Result<&'x T, Self> {
+    /// Requests a shared reference to a value of type `T`, marked by the tag [`Ref<Value<T>>`].
+    /// Values of type `T` must not hold any borrowed data.
+    fn request_ref<T: 'static + ?Sized>(self) -> Result<&'x T, Self> {
         self.request::<Ref<Value<T>>>(())
     }
 
-    fn request_mut<T: 'static>(self) -> Result<&'x mut T, Self> {
+    /// Requests a unique reference to a value of type `T`, marked by the tag [`Mut<Value<T>>`].
+    /// Values of type `T` must not hold any borrowed data.
+    fn request_mut<T: 'static + ?Sized>(self) -> Result<&'x mut T, Self> {
         self.request::<Mut<Value<T>>>(())
     }
 }
@@ -43,7 +60,7 @@ impl<'x, LTail: Lt, P: Provide<'x, LTail>> Provide<'x, LTail> for Option<P> {
     }
 }
 
-impl<'x, LTail: Lt, P: ProvideRef<LTail>> ProvideRef<LTail> for &mut Option<P> {
+impl<LTail: Lt, P: ProvideRef<LTail>> ProvideRef<LTail> for &mut Option<P> {
     fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, LTail>) {
         if let Some(this) = self {
             this.provide_ref(query);
@@ -57,12 +74,24 @@ impl<'x, LTail: Lt, P: ProvideRef<LTail>> ProvideRef<LTail> for &mut Option<P> {
     }
 }
 
-pub trait ProvideRef<L: Lt = ()> {
-    fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, L>) {
+/// Provides access to values of arbitrary type from a reference.
+///
+/// Requested values are specified using a [`TypeTag`][crate::TypeTag] implementation, or to be more specific, a [`TagFor<LTail>`]
+/// implementation.
+pub trait ProvideRef<LTail: Lt = ()> {
+    /// Supplies the requested value to the given [`Query`] from a shared reference to `Self`, if available.
+    ///
+    /// The default implementation supplies nothing;
+    /// override this method to supply values from a shared reference.
+    fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, LTail>) {
         let _ = query;
     }
 
-    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, 'this, L>) {
+    /// Supplies the requested value to the given [`Query`] from a unique reference to `Self`, if available.
+    ///
+    /// The default implementation supplies nothing;
+    /// override this method to supply values from a shared reference.
+    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, 'this, LTail>) {
         let _ = query;
     }
 }
@@ -91,6 +120,7 @@ impl<'x, P: ?Sized + ProvideRef<L>, L: Lt> Provide<'x, L> for &'x mut P {
     }
 }
 
+/// Provides a value given a unique reference to `T`, returning the reference if a value was not supplied.
 fn provide_mut_with<'x, T: ?Sized, L: Lt, R>(
     in_ref: &'x mut T,
     query: &mut Query<'_, 'x, L>,
@@ -118,9 +148,21 @@ fn provide_mut_with<'x, T: ?Sized, L: Lt, R>(
     (out, out_ref)
 }
 
+/// Implements [`Provide`] by delegating to a function of type `F`.
+///
+/// Return type for [`provide_with_fn()`].
+#[derive(Clone, Copy)]
 pub struct FnProvider<T, F> {
     value: T,
     f: F,
+}
+
+impl<T: core::fmt::Debug, F> core::fmt::Debug for FnProvider<T, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FnProvider")
+            .field("value", &self.value)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'x, T, F, L: Lt> Provide<'x, L> for FnProvider<T, F>
@@ -142,17 +184,41 @@ impl<T, F> FnProvider<T, F> {
     }
 }
 
-pub fn provide_with_fn<'x, T, F, L: Lt>(value: T, provide: F) -> FnProvider<T, F>
+/// Returns a [`Provide`] implementation that delegates to the given function.
+///
+/// ```
+/// use dynamic_provider::{provide_with, Provide};
+///
+/// let provider = provide_with(
+///     String::from("Hello, world!"),
+///     |query| query.put_value(|this| this).put_value(Vec::<u8>::from),
+/// );
+///
+/// assert_eq!(Provide::<()>::request_value::<Vec<u8>>(provider).unwrap(), b"Hello, world!");
+/// ```
+pub fn provide_with<'x, T, F, L: Lt>(value: T, provide: F) -> FnProvider<T, F>
 where
     F: for<'q> FnMut(QueryUsing<'q, 'x, T, L>) -> QueryUsing<'q, 'x, T, L>,
 {
     FnProvider { value, f: provide }
 }
 
+/// Implements [`ProvideRef`] by delegating to a function of type `F`.
+///
+/// Return type for [`provide_by_ref_with_fn()`].
+#[derive(Clone, Copy)]
 pub struct FnRefProvider<T, FRef, FMut> {
     value: T,
     f_ref: FRef,
     f_mut: FMut,
+}
+
+impl<T: core::fmt::Debug, FRef, FMut> core::fmt::Debug for FnRefProvider<T, FRef, FMut> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FnRefProvider")
+            .field("value", &self.value)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T, FRef, FMut, L: Lt> ProvideRef<L> for FnRefProvider<T, FRef, FMut>
@@ -179,7 +245,20 @@ impl<T, FRef, FMut> FnRefProvider<T, FRef, FMut> {
     }
 }
 
-pub fn provide_by_ref_with_fn<T, FRef, FMut, L: Lt>(
+/// Returns a [`ProvideRef`] implementation that delegates to the given function.
+///
+/// ```
+/// use dynamic_provider::{provide_by_ref_with, Provide};
+///
+/// let provider = provide_by_ref_with(
+///     String::from("Hello, world!"),
+///     |query| query.put_value(Clone::clone).put_ref(|s| s.as_bytes()),
+///     |query| query,
+/// );
+///
+/// assert_eq!(Provide::<()>::request_ref::<[u8]>(&provider).unwrap(), b"Hello, world!");
+/// ```
+pub fn provide_by_ref_with<T, FRef, FMut, L: Lt>(
     value: T,
     provide_ref: FRef,
     provide_mut: FMut,
@@ -219,6 +298,7 @@ enum WhenProviderState<P, Cx, Out> {
 pub struct HasContext<Cx>(Cx);
 pub struct NoContext;
 
+/// Helper function for requesting one of multiple possible values.
 pub fn when_provider<'x, L: Lt, P: Provide<'x, L>, Out>(
     provider: P,
 ) -> WhenProvider<'x, L, P, NoContext, Out> {
@@ -232,6 +312,7 @@ pub fn when_provider<'x, L: Lt, P: Provide<'x, L>, Out>(
     }
 }
 
+/// Return type of [`when_provider()`]
 pub struct WhenProvider<'x, L, P, Cx, Out> {
     state: WhenProviderState<P, Cx, Out>,
     _lt: PhantomData<&'x ()>,
@@ -240,6 +321,7 @@ pub struct WhenProvider<'x, L, P, Cx, Out> {
 
 macro_rules! impl_when_provider_methods {
     (has_context = $has_context:ident) => {
+        /// Handle the case where the type marked by `Tag` is supplied by the provider.
         pub fn has<Tag: TagFor<L>>(
             mut self,
             arg: Tag::ArgValue<'x>,
@@ -269,6 +351,7 @@ macro_rules! impl_when_provider_methods {
             self
         }
 
+        /// Handle the case where a value of type `T`, marked by [`Value<T>`], is supplied by the provider.
         pub fn has_value<T: 'static>(
             self,
             transform: transform_type!(has_context = $has_context, arg = T),
@@ -276,14 +359,18 @@ macro_rules! impl_when_provider_methods {
             self.has::<Value<T>>((), transform)
         }
 
-        pub fn has_ref<T: 'static>(
+        /// Handle the case where a shared reference to a value of type `T`,
+        /// marked by [`Ref<Value<T>>`], is supplied by the provider.
+        pub fn has_ref<T: 'static + ?Sized>(
             self,
     transform: transform_type!(has_context = $has_context, arg = &'x T),
         ) -> Self {
             self.has::<Ref<Value<T>>>((), transform)
         }
 
-        pub fn has_mut<T: 'static>(
+        /// Handle the case where a unique reference to a value of type `T`,
+        /// marked by [`Mut<Value<T>>`], is supplied by the provider.
+        pub fn has_mut<T: 'static + ?Sized>(
             self,
     transform: transform_type!(has_context = $has_context, arg = &'x mut T),
         ) -> Self {
@@ -311,6 +398,8 @@ macro_rules! transform_call {
 }
 
 impl<'x, L: Lt, P: Provide<'x, L>, Out> WhenProvider<'x, L, P, NoContext, Out> {
+    /// Returns the output of the successful request if there is one, or an `Err` containing the original
+    /// provider.
     pub fn finish(self) -> Result<Out, P> {
         match self.state {
             WhenProviderState::Provider {
@@ -321,6 +410,14 @@ impl<'x, L: Lt, P: Provide<'x, L>, Out> WhenProvider<'x, L, P, NoContext, Out> {
         }
     }
 
+    /// Returns the output of the successful request if there is one, or the return value of the given
+    /// function that accepts the original provider.
+    pub fn or_else(self, f: impl FnOnce(P) -> Out) -> Out {
+        self.finish().unwrap_or_else(f)
+    }
+
+    /// Adds a context value to all subsequent request handlers, which will be passed as the second
+    /// callback parameter.
     pub fn with<Cx>(self, context: Cx) -> WhenProvider<'x, L, P, HasContext<Cx>, Out> {
         WhenProvider {
             state: match self.state {
@@ -342,6 +439,8 @@ impl<'x, L: Lt, P: Provide<'x, L>, Out> WhenProvider<'x, L, P, NoContext, Out> {
 }
 
 impl<'x, L: Lt, P: Provide<'x, L>, Cx, Out> WhenProvider<'x, L, P, HasContext<Cx>, Out> {
+    /// Returns the output of the successful request if there is one, or an `Err` containing the original
+    /// provider and the context value.
     pub fn finish(self) -> Result<Out, (P, Cx)> {
         match self.state {
             WhenProviderState::Provider {
@@ -350,6 +449,13 @@ impl<'x, L: Lt, P: Provide<'x, L>, Cx, Out> WhenProvider<'x, L, P, HasContext<Cx
             } => Err((provider, context)),
             WhenProviderState::Output { out } => Ok(out),
         }
+    }
+
+    /// Returns the output of the successful request if there is one, or the return value of the given
+    /// function that accepts the original provider and the context value.
+    pub fn or_else(self, f: impl FnOnce(P, Cx) -> Out) -> Out {
+        self.finish()
+            .unwrap_or_else(|(provider, cx)| f(provider, cx))
     }
 
     impl_when_provider_methods!(has_context = true);

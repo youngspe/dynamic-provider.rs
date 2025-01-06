@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use crate::{tag::TypeTag, utils::Implies, LifetimeHkt};
+use crate::{tag::TypeTag, LifetimeHkt};
 
 mod sealed {
     pub trait LifetimeHkt {}
@@ -38,6 +38,7 @@ pub struct Final<T: ?Sized>(Invariant<T>);
 
 pub type LtList<'x, L = ()> = (Lifetime<'x>, L);
 
+/// Represents a list of zero or more lifetime variables
 pub trait Lt: sealed::Lt {
     type Next: Lt<Signature = <Self::Signature as LtSignature>::Next>;
     type Signature: LtSignature;
@@ -47,10 +48,6 @@ pub trait Lt: sealed::Lt {
 pub trait LtSignature: 'static {
     type Next: LtSignature;
     type As<'x>: Lt<Signature = Self> + 'x;
-}
-
-pub trait WithLt<L: Lt> {
-    type Value: ?Sized;
 }
 
 impl sealed::Lt for () {}
@@ -90,10 +87,6 @@ impl<T: ?Sized + 'static> TypeTag for Final<T> {
     type Def = Self;
 }
 
-impl<T: ?Sized> WithLt<()> for Final<T> {
-    type Value = T;
-}
-
 impl<T: ?Sized + sealed::LifetimeHkt> sealed::LifetimeHkt for HktWrapper<T> {}
 
 impl<'lt, F: ?Sized + 'static> TypeTag for HktWrapper<F>
@@ -105,16 +98,54 @@ where
     type Def = Self;
 }
 
-impl<'lt, L, F: ?Sized, T: ?Sized> WithLt<(Lifetime<'lt>, L)> for HktWrapper<F>
-where
-    L: Lt,
-    F: for<'x> _LifetimeHktOf<'x>,
-    <F as _LifetimeHktOf<'lt>>::T: WithLt<L, Value = T>,
-{
-    type Value = T;
-}
-
+/// Represents a type that is parameterized over one or more lifetime variables.
+///
+/// The lifetime parameters are broken into two parts:
+/// the <dfn>primary lifetime</dfn> and the <dfn>lifetime tail</dfn>.
+///
+/// The primary lifetime parameter is implied for every `TypeFn` implementation,
+/// but the lifetime tail is a [`LtList`] or [`LtSignature`] that must be explicitly specified.
+///
+/// For a more concrete example, `TypeFn![for<'x, 'y, 'z> Foo<'x, 'y, 'z>]` is a type that implements
+/// ```ignore
+/// for<'x, 'y, 'z> TypeFn<
+///     Lt!['static, 'static],
+///     OutputOver<Lt!['y, 'z]>: LifetimeHkt<Actual<'x> = Foo<'x, 'y, 'z>>,
+/// >
+/// ```
+///
+/// When a type implementing `TypeFn` is needed, it is usually best to use [`TypeFn!`].
+///
+/// A manual implementation of `TypeFn` may be necessary to operate on another implementation.
+///
+/// For example, [`Ref<F>`] represents a borrow of `F`'s output type over the primary lifetime parameter.
+/// To work on any lifetime tail supported by `F` a manual implementation like this is necessary:
+///
+/// ```
+/// use dynamic_provider::{LifetimeHkt, Lt, LtSignature, TypeFn, TypeFnOutput};
+///
+/// struct Ref<F>(F);
+///
+/// impl<F, S> TypeFn<S> for Ref<F>
+/// where
+///     F: TypeFn<S>,
+///     S: LtSignature,
+/// {
+///     type OutputOver<L: Lt<Signature = S>> = LifetimeHkt![for<'x> &'x TypeFnOutput<'x, F, L>];
+/// }
+/// ```
+///
+/// ## Note
+///
+/// Types implementing this trait are generally meant to be used in generic parameters but not instantiated as values.
+///
+/// [`Ref<F>`]: crate::tag::Ref
 pub trait TypeFn<STail: LtSignature>: Sized {
+    /// A [`LifetimeHkt`] representing the output type as a function of the primary lifetime
+    /// parameter given the lifetime tail `LTail`.
+    ///
+    /// [`LifetimeHkt`] is used here rather than a generic lifetime parameter because it supports
+    /// implied lifetime bounds.
     type OutputOver<LTail: Lt<Signature = STail>>: LifetimeHkt;
 }
 
@@ -141,8 +172,17 @@ pub trait TypeFnOf<LTail: Lt>:
     type Output<'x>: ?Sized;
 }
 
-pub trait TypeFnOfSized<LTail: Lt>: for<'x> TypeFnOf<LTail, Output<'x>: Sized> {}
-
+/// The output of a [`TypeFn`] `F` with primary lifetime `'x` and lifetime tail `LTail`.
+///
+/// For example, this `TypeFn`
+/// ```ignore
+/// type MyTypeFn = TypeFn![for<'x, y, z> Foo<'x, 'y, 'z>];
+/// ```
+///
+/// would satisfy the following:
+/// ```ignore
+/// TypeFnOutput<'x, MyTypeFn, Lt!['y, 'z]> == Foo<'x, 'y, 'z>;
+/// ```
 pub type TypeFnOutput<'x, F, LTail = ()> = <F as TypeFnOf<LTail>>::Output<'x>;
 
 impl<F, LTail> TypeFnOf<LTail> for F
@@ -153,14 +193,24 @@ where
     type Output<'x> = Actual<'x, F::OutputOver<LTail>>;
 }
 
-impl<F, LTail> TypeFnOfSized<LTail> for F
-where
-    LTail: Lt,
-    F: TypeFn<LTail::Signature>,
-    for<'x> Actual<'x, F::OutputOver<LTail>>: Sized,
-{
-}
-
+/// Evaluates to an [`Lt`] implementation with the given list of lifetime specifiers.
+///
+/// ## Usage
+///
+/// ```ignore
+/// Lt!['a, 'b, 'c]
+/// ```
+///
+/// Another lifetime list can be concatenated using `..`:
+///
+/// ```ignore
+/// Lt!['a, 'b, 'c, ..L]
+/// ```
+///
+/// This macro can also be used to produce [`LtSignature`] implementations by using `'static` lifetimes:
+/// ```ignore
+/// Lt!['static, 'static, 'static]
+/// ```
 #[macro_export]
 macro_rules! Lt {
     () => { () };
@@ -170,6 +220,13 @@ macro_rules! Lt {
     (..$Ty:ty) => { $Ty };
 }
 
+/// Evaluates to a [`LifetimeHkt`] implementation.
+///
+/// ## Usage
+///
+/// ```ignore
+/// LifetimeHkt![for<'x> Cow<'x, str>]
+/// ```
 #[macro_export]
 macro_rules! LifetimeHkt {
     (for <$lt:lifetime> $T:ty) => {
@@ -177,10 +234,17 @@ macro_rules! LifetimeHkt {
     };
 }
 
+/// Evaluates to a [`TypeFn`] implementation.
+///
+/// ## Usage
+///
+/// ```ignore
+/// TypeFn![for<'x, 'y, 'z> (Cow<'x, str>, &'y str, &'z mut [u8])]
+/// ```
 #[macro_export]
 macro_rules! TypeFn {
     (for <> $T:ty) => { $crate::lt::Final<$T> };
-    (for <$lt0:lifetime, $($lt:lifetime),* $(,)?> $T:ty) => {
+    (for <$lt0:lifetime $(,$lt:lifetime)* $(,)?> $T:ty) => {
         $crate::LifetimeHkt![for<$lt0> $crate::TypeFn![for <$($lt),*> $T]]
     };
     ($T:ty) => { $crate::lt::Final::<$T> };
