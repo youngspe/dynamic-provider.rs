@@ -2,32 +2,32 @@ use crate::{Lt, Provide, ProvideRef, Query};
 use alloc::{boxed::Box, rc::Rc, string::String, sync::Arc};
 
 /// Provides values from a [`Box`].
-pub trait ProvideBox<'x, LTail: Lt = ()> {
+pub trait ProvideBox<LTail: Lt = ()> {
     fn provide_box<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this>>
+        query: &mut Query<'_, LTail>,
+    ) -> Option<Box<dyn ProvideBox<LTail> + 'this>>
     where
         Self: 'this;
     fn provide_box_send<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this + Send>>
+        query: &mut Query<'_, LTail>,
+    ) -> Option<Box<dyn ProvideBox<LTail> + 'this + Send>>
     where
         Self: 'this + Send;
     fn provide_box_send_sync<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this + Send + Sync>>
+        query: &mut Query<'_, LTail>,
+    ) -> Option<Box<dyn ProvideBox<LTail> + 'this + Send + Sync>>
     where
         Self: 'this + Send + Sync;
 }
 
-impl<'x, P: Provide<'x, LTail>, LTail: Lt> ProvideBox<'x, LTail> for P {
+impl<P: Provide<L>, L: Lt> ProvideBox<L> for P {
     fn provide_box<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this>>
     where
         Self: 'this,
     {
@@ -36,8 +36,8 @@ impl<'x, P: Provide<'x, LTail>, LTail: Lt> ProvideBox<'x, LTail> for P {
 
     fn provide_box_send<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this + Send>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this + Send>>
     where
         Self: 'this + Send,
     {
@@ -46,8 +46,8 @@ impl<'x, P: Provide<'x, LTail>, LTail: Lt> ProvideBox<'x, LTail> for P {
 
     fn provide_box_send_sync<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, 'x, LTail>,
-    ) -> Option<Box<dyn ProvideBox<'x, LTail> + 'this + Send + Sync>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this + Send + Sync>>
     where
         Self: 'this + Send + Sync,
     {
@@ -55,30 +55,28 @@ impl<'x, P: Provide<'x, LTail>, LTail: Lt> ProvideBox<'x, LTail> for P {
     }
 }
 
-impl<'x: 'data, 'data, LTail: Lt + 'data> Provide<'x, LTail>
-    for Box<dyn ProvideBox<'x, LTail> + 'data>
-{
-    fn provide(self, query: &mut Query<'_, 'x, LTail>) -> Option<Self> {
+impl<'data, L: Lt + 'data> Provide<L> for Box<dyn ProvideBox<L> + 'data> {
+    fn provide(self, query: &mut Query<'_, L>) -> Option<Self> {
         self.provide_box(query)
     }
 }
 
 impl<P: ?Sized + ProvideRef<LTail>, LTail: Lt> ProvideRef<LTail> for Box<P> {
-    fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_ref<'this>(&'this self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         P::provide_ref(self, query);
     }
 
-    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         P::provide_mut(self, query);
     }
 }
 
 impl<P: ?Sized + ProvideRef<LTail>, LTail: Lt> ProvideRef<LTail> for Rc<P> {
-    fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_ref<'this>(&'this self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         P::provide_ref(self, query);
     }
 
-    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         if let Some(this) = Rc::get_mut(self) {
             P::provide_mut(this, query);
         }
@@ -86,19 +84,19 @@ impl<P: ?Sized + ProvideRef<LTail>, LTail: Lt> ProvideRef<LTail> for Rc<P> {
 }
 
 impl<P: ?Sized + ProvideRef<LTail>, LTail: Lt> ProvideRef<LTail> for Arc<P> {
-    fn provide_ref<'this>(&'this self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_ref<'this>(&'this self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         P::provide_ref(self, query);
     }
 
-    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, 'this, LTail>) {
+    fn provide_mut<'this>(&'this mut self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
         if let Some(this) = Arc::get_mut(self) {
             P::provide_mut(this, query);
         }
     }
 }
 
-impl<LTail: Lt> Provide<'_, LTail> for String {
-    fn provide(self, query: &mut Query<LTail>) -> Option<Self> {
+impl<L: Lt> Provide<L> for String {
+    fn provide(self, query: &mut Query<L>) -> Option<Self> {
         query
             .using(self)
             .put_value(|this| this)
@@ -106,5 +104,11 @@ impl<LTail: Lt> Provide<'_, LTail> for String {
             .put_value(|this| this.into_bytes())
             .put_value(|this| this.into_bytes().into_boxed_slice())
             .finish()
+    }
+}
+
+impl<LTail: Lt> ProvideRef<LTail> for String {
+    fn provide_ref<'this>(&'this self, query: &mut Query<'_, Lt!['this, ..LTail]>) {
+        str::provide_ref(self, query)
     }
 }

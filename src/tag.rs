@@ -1,9 +1,6 @@
-use core::{any::TypeId, marker::PhantomData};
+use core::{any::TypeId, convert::Infallible, marker::PhantomData};
 
-use crate::{
-    lt::{LtSignature, TypeFn, TypeFnOf, TypeFnOutput},
-    LifetimeHkt, Lt,
-};
+use crate::{type_fn::TypeFn, LifetimeHkt, Lt};
 
 /// A unique identifier for a specific [`TypeTag`]-implementing type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -27,9 +24,9 @@ pub struct PreventOverridingTagId;
 /// Types implementing this trait are generally meant to be used in generic parameters but not instantiated as values.
 pub trait TypeTag: 'static {
     /// A [`TypeFn`] specifying the argument type of this tag.
-    type Arg: 'static;
+    type Arg: TypeFn;
     /// A [`TypeFn`] specifying the resolved type of this tag.
-    type Def: 'static;
+    type Out: TypeFn;
 
     #[doc(hidden)]
     fn _tag_id(_: PreventOverridingTagId) -> TagId {
@@ -37,84 +34,96 @@ pub trait TypeTag: 'static {
     }
 }
 
-/// A [`TypeTag`] that is defined over the given lifetime tail.
-/// This should not be implemented directly; it will be auto-implemented for tag types where
-/// [`TypeTag::Arg`] and [`TypeTag::Def`] implement [`TypeFnOf<LTail>`].
-pub trait TagFor<LTail: Lt>: TypeTag<Arg = Self::ArgTypeFn, Def = Self::TypeFn> {
-    #[doc(hidden)]
-    type ArgTypeFn: for<'x> TypeFnOf<LTail, Output<'x> = Self::ArgValue<'x>>;
-    #[doc(hidden)]
-    type TypeFn: for<'x> TypeFnOf<LTail, Output<'x> = Self::Value<'x>>;
-
-    /// The argument type, given the primary lifetime `'x`.
-    type ArgValue<'x>;
-    /// The output type, given the primary lifetime `'x`.
-    type Value<'x>;
+/// A [`TypeTag`] that is defined over the given lifetimes.
+/// This should not be implemented directly; it will be automatically implemented.
+pub trait TagFor<L: Lt>:
+    TypeTag<Arg: TypeFn<Output<L> = Self::ArgValue>, Out: TypeFn<Output<L> = Self::Value>>
+{
+    /// The argument type.
+    type ArgValue;
+    /// The output type.
+    type Value;
 }
 
-impl<Tag, LTail> TagFor<LTail> for Tag
+impl<Tag, L, ArgValue, Value> TagFor<L> for Tag
 where
-    Tag: TypeTag,
-    for<'x> Tag::Arg: TypeFnOf<LTail, Output<'x>: Sized>,
-    for<'x> Tag::Def: TypeFnOf<LTail, Output<'x>: Sized>,
-    LTail: Lt,
+    Tag: TypeTag<Arg: TypeFn<Output<L> = ArgValue>, Out: TypeFn<Output<L> = Value>>,
+    L: Lt,
 {
-    type ArgTypeFn = Tag::Arg;
-    type TypeFn = Tag::Def;
-
-    type ArgValue<'x> = TypeFnOutput<'x, Tag::Arg, LTail>;
-    type Value<'x> = TypeFnOutput<'x, Tag::Def, LTail>;
+    type ArgValue = ArgValue;
+    type Value = Value;
 }
 
 impl TypeTag for () {
     type Arg = ();
-    type Def = ();
+    type Out = ();
 }
 
-/// A [`TypeTag`] that corresponds to a value of type `T` that contains no borrowed data (i.e. `T: 'static`).
-pub struct Value<T: ?Sized>(PhantomData<T>);
+/// A [`TypeFn`] that corresponds to `T` for all lifetime arguments.
+/// Can be used as a [`TypeTag`] when `T` has a fixed size and contains no borrowed data
+/// (i.e. `T: Sized + 'static`).
+pub struct Value<T: ?Sized>(Infallible, PhantomData<T>);
+
+impl<T: ?Sized> TypeFn for Value<T> {
+    type Output<L: Lt> = T;
+}
 
 impl<T: ?Sized + 'static> TypeTag for Value<T> {
     type Arg = ();
-    type Def = crate::TypeFn![T];
+    type Out = crate::TypeFn![T];
 }
 
 /// A [`TypeTag`] that corresponds to a shared reference to the output value of `Tag`.
+/// Can also be used as an operator on [`TypeFn`] implementations.
 ///
-/// For example, <code>Ref<[Value<T\>]></code> corresponds to `&'x T`, where `'x` is the primary
-/// lifetime parameter.
-/// This type can be similarly used to operate on [`TypeFn`] implementations.
-pub struct Ref<Tag>(PhantomData<Tag>);
+/// For example: <code>Ref<[Value<T\>]></code> implements the following for all `'x, T: 'static`:
+///
+/// ```ignore
+/// TypeFn<Output<Lt!['x]> = &'x T> + TypeTag + TagFor<Lt!['x], Value = &'x T>
+/// ```
+pub struct Ref<Tag>(Tag);
 
-impl<F, S> TypeFn<S> for Ref<F>
+impl<F> TypeFn for Ref<F>
 where
-    F: TypeFn<S>,
-    S: LtSignature,
+    F: TypeFn,
 {
-    type OutputOver<L: Lt<Signature = S>> = LifetimeHkt![for<'x> &'x TypeFnOutput<'x, F, L>];
+    type Output<L: Lt> = L::Actual<LifetimeHkt![for<'y> &'y F::Output<L>]>;
 }
 
 impl<Tag: TypeTag> TypeTag for Ref<Tag> {
     type Arg = Tag::Arg;
-    type Def = Ref<Tag::Def>;
+    type Out = Ref<Tag::Out>;
 }
 
 /// A [`TypeTag`] that corresponds to a unique reference to the output value of `Tag`.
+/// Can also be used as an operator on [`TypeFn`] implementations.
 ///
-/// For example, <code>Mut<[Value<T\>]></code> corresponds to `&'x mut T`, where `'x` is the primary
-/// lifetime parameter.
-/// This type can be similarly used to operate on [`TypeFn`] implementations.
-pub struct Mut<Tag>(PhantomData<Tag>);
+/// For example: <code>Mut<[Value<T\>]></code> implements the following for all `'x, T: 'static`:
+///
+/// ```ignore
+/// TypeFn<Output<Lt!['x]> = &'x mut T> + TypeTag + TagFor<Lt!['x], Value = &'x mut T>
+/// ```
+pub struct Mut<Tag>(Tag);
 
-impl<F, S> TypeFn<S> for Mut<F>
+impl<F> TypeFn for Mut<F>
 where
-    F: TypeFn<S>,
-    S: LtSignature,
+    F: TypeFn,
 {
-    type OutputOver<L: Lt<Signature = S>> = LifetimeHkt![for<'x> &'x mut TypeFnOutput<'x, F, L>];
+    type Output<L: Lt> = L::Actual<LifetimeHkt![for<'y> &'y mut F::Output<L>]>;
 }
 
 impl<Tag: TypeTag> TypeTag for Mut<Tag> {
     type Arg = Tag::Arg;
-    type Def = Mut<Tag::Def>;
+    type Out = Mut<Tag::Out>;
+}
+
+/// A tag that is never meant to be fulfilled but has a valid [`TagId`].
+pub(crate) struct MarkerTag<T: ?Sized> {
+    _p: PhantomData<T>,
+    _i: Infallible,
+}
+
+impl<T: ?Sized + 'static> TypeTag for MarkerTag<T> {
+    type Arg = ();
+    type Out = Value<(Infallible, T)>;
 }

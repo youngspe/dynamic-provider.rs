@@ -1,29 +1,49 @@
 use core::{convert::Infallible, mem};
 
 use crate::{
-    lt::Lt,
-    tag::{Mut, Ref, TagFor, TagId, Value},
+    tag::{MarkerTag, Mut, Ref, TagFor, TagId, Value},
+    Lt,
 };
 
+struct AlreadyFulfilled;
+struct ShouldRecordAttempts;
+
+/// The generic arg to [`QueryGeneric`] that unsizes to [`dyn ErasedQueryState`][ErasedQueryState].
+///
+/// This is `repr(C)` so that `&mut QueryState<T, Arg, F>` is a valid `&mut QueryState<T, Arg, Empty>`.
+#[repr(C)]
+struct QueryState<T, Arg, F> {
+    value: QueryValue<T, Arg>,
+    on_provide_attempt: F,
+}
+
+/// Internal state of a query.
 #[derive(Default)]
-enum QueryState<T, Arg> {
+enum QueryValue<T, Arg> {
+    /// Invalid state so we can move `Arg` out of `&mut Self`.
     #[default]
     Invalid,
+    /// Fulfilled query.
     Value(T),
+    /// Unfulfilled query with whatever argument the tag requires.
     Arg(Arg),
 }
+
+/// Just a `repr(C)` zero-sized type to stand in place of `F` in [`TypedQuery`].
+#[repr(C)]
+struct Empty {}
 
 /// Result of successful [`Query::downcast()`] call.
 #[repr(transparent)]
 struct TypedQuery<T, Arg> {
-    inner: QueryGeneric<QueryState<T, Arg>>,
+    inner: QueryGeneric<QueryState<T, Arg, Empty>>,
 }
 
 impl<T, Arg> TypedQuery<T, Arg> {
     fn fulfill(&mut self, value: T) {
-        if let QueryState::Arg { .. } = self.inner.state {
-            self.inner.state = QueryState::Value(value);
-            self.inner.tag_id = None;
+        if let QueryValue::Arg { .. } = self.inner.state.value {
+            self.inner.state.value = QueryValue::Value(value);
+            self.inner.tag_id = TagId::of::<MarkerTag<AlreadyFulfilled>>();
         }
     }
 
@@ -32,15 +52,15 @@ impl<T, Arg> TypedQuery<T, Arg> {
     }
 
     fn try_fulfill_with<R>(&mut self, f: impl FnOnce(Arg) -> Result<T, (Arg, R)>) -> Option<R> {
-        let QueryState::Arg(arg) = mem::take(&mut self.inner.state) else {
+        let QueryValue::Arg(arg) = mem::take(&mut self.inner.state.value) else {
             return None;
         };
         let out;
-        (out, self.inner.state) = match f(arg) {
-            Ok(value) => (None, QueryState::Value(value)),
-            Err((arg, out)) => (Some(out), QueryState::Arg(arg)),
+        (out, self.inner.state.value) = match f(arg) {
+            Ok(value) => (None, QueryValue::Value(value)),
+            Err((arg, out)) => (Some(out), QueryValue::Arg(arg)),
         };
-        self.inner.tag_id = None;
+        self.inner.tag_id = TagId::of::<MarkerTag<AlreadyFulfilled>>();
         out
     }
 }
@@ -48,31 +68,43 @@ impl<T, Arg> TypedQuery<T, Arg> {
 /// ## Safety
 /// It's assumed an implementor is `QueryState<Tag::Value<'x>, Tag::ArgValue<'x>>` for some `Arg: TagFor<L>`
 /// and can be downcast back to the concrete type if `Tag` is known.
-pub unsafe trait ErasedQueryState<'x, L: Lt> {}
+pub unsafe trait ErasedQueryState<L: Lt> {
+    fn record_attempt(&mut self, tag_id: TagId);
+}
 
-unsafe impl<L, T, Arg> ErasedQueryState<'_, L> for QueryState<T, Arg> where L: Lt {}
-
+unsafe impl<L, T, Arg, F> ErasedQueryState<L> for QueryState<T, Arg, F>
+where
+    L: Lt,
+    F: FnMut(TagId),
+{
+    fn record_attempt(&mut self, tag_id: TagId) {
+        (self.on_provide_attempt)(tag_id);
+    }
+}
 /// Generic type meant for unsizing to [Query].
 #[repr(C)]
 pub struct QueryGeneric<Q: ?Sized> {
     /// Identifies the tag type with which `state` was created.
-    /// When the query has been fulfilled, this will be set to `None` to indicate no future
+    /// When the query has been fulfilled, this will be set to `TagId::of::<MarkerTag<AlreadyFulfilled>>()` to indicate no future
     /// downcasts need be attempted.
-    tag_id: Option<TagId>,
+    tag_id: TagId,
     /// Either a `QueryState` or a `dyn ErasedQueryState` holding the query's internal state
     /// (whether fulfilled or unfulfilled).
     state: Q,
 }
 
-impl<T, Arg> QueryGeneric<QueryState<T, Arg>> {
-    fn new<'x, Tag, L>(arg: Arg) -> Self
+impl<T, Arg, F> QueryGeneric<QueryState<T, Arg, F>> {
+    fn new<Tag, L>(arg: Arg, on_provide_attempt: F) -> Self
     where
-        Tag: TagFor<L, Value<'x> = T, ArgValue<'x> = Arg>,
+        Tag: TagFor<L, Value = T, ArgValue = Arg>,
         L: Lt,
     {
         Self {
-            tag_id: Some(TagId::of::<Tag>()),
-            state: QueryState::Arg(arg),
+            tag_id: TagId::of::<Tag>(),
+            state: QueryState {
+                value: QueryValue::Arg(arg),
+                on_provide_attempt,
+            },
         }
     }
 }
@@ -80,18 +112,22 @@ impl<T, Arg> QueryGeneric<QueryState<T, Arg>> {
 /// A type-erased query ready to pass to [`crate::Provide::provide()`].
 ///
 /// Providers may use this type to supply tagged values.
-pub type Query<'data, 'x, LTail = ()> = QueryGeneric<dyn ErasedQueryState<'x, LTail> + 'data>;
+pub type Query<'data, L = ()> = QueryGeneric<dyn ErasedQueryState<L> + 'data>;
 
-impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
-    fn downcast<Tag: TagFor<LTail>>(
-        &mut self,
-    ) -> Option<&mut TypedQuery<Tag::Value<'x>, Tag::ArgValue<'x>>> {
-        if self.tag_id == Some(TagId::of::<Tag>()) {
+impl<L: Lt> Query<'_, L> {
+    fn downcast<Tag: TagFor<L>>(&mut self) -> Option<&mut TypedQuery<Tag::Value, Tag::ArgValue>> {
+        let tag_id = TagId::of::<Tag>();
+
+        if self.tag_id == TagId::of::<MarkerTag<ShouldRecordAttempts>>() {
+            self.state.record_attempt(tag_id);
+            return None;
+        }
+
+        if self.tag_id == tag_id {
             // SAFETY: `Tag` is the same type used to create this query, so the underlying type should be
             // TypedQuery<Tag::Value, Tag::ArgValue>
-            let query = unsafe {
-                &mut *(self as *mut Self as *mut TypedQuery<Tag::Value<'x>, Tag::ArgValue<'x>>)
-            };
+            let query =
+                unsafe { &mut *(self as *mut Self as *mut TypedQuery<Tag::Value, Tag::ArgValue>) };
 
             return Some(query);
         }
@@ -101,19 +137,26 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
 
     /// Returns `true` if the query has been fulfilled and no values will be accepted in the future.
     pub fn is_fulfilled(&self) -> bool {
-        self.tag_id.is_none()
+        self.tag_id == TagId::of::<MarkerTag<AlreadyFulfilled>>()
     }
 
     /// Returns `true` if this query would accept a value tagged with `Tag`.
     ///
     /// **Note**: this will return `false` if a value tagged with `Tag` _was_ expected and has been
     /// fulfilled, as it will not accept additional values.
-    pub fn expects<Tag: TagFor<LTail>>(&self) -> bool {
-        self.tag_id == Some(TagId::of::<Tag>())
+    pub fn expects<Tag: TagFor<L>>(&self) -> bool {
+        self.tag_id == TagId::of::<Tag>()
+    }
+
+    /// Returns the [`TagId`] expected by this query.
+    ///
+    /// If this query has already been fulfilled, the returned ID is unspecified.
+    pub fn expected_tag_id(&self) -> TagId {
+        self.tag_id
     }
 
     /// Attempts to fulfill the query with a value marked with `Tag`.
-    pub fn put<Tag: TagFor<LTail>>(&mut self, value: Tag::Value<'x>) -> &mut Self {
+    pub fn put<Tag: TagFor<L>>(&mut self, value: Tag::Value) -> &mut Self {
         if let Some(state) = self.downcast::<Tag>() {
             state.fulfill(value)
         }
@@ -124,9 +167,9 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     /// Attempts to fulfill the query with a function returning a value marked with `Tag`.
     ///
     /// The function will not be called if the query does not accept `Tag`.
-    pub fn put_with<Tag: TagFor<LTail>>(
+    pub fn put_with<Tag: TagFor<L>>(
         &mut self,
-        f: impl FnOnce(Tag::ArgValue<'x>) -> Tag::Value<'x>,
+        f: impl FnOnce(Tag::ArgValue) -> Tag::Value,
     ) -> &mut Self {
         if let Some(state) = self.downcast::<Tag>() {
             state.fulfill_with(f);
@@ -139,10 +182,10 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     /// if `predicate` returns `false`.
     ///
     /// The function will not be called if the query does not accept `Tag`.
-    pub fn put_where<Tag: TagFor<LTail>>(
+    pub fn put_where<Tag: TagFor<L>>(
         &mut self,
-        predicate: impl FnOnce(&mut Tag::ArgValue<'x>) -> bool,
-        f: impl FnOnce(Tag::ArgValue<'x>) -> Tag::Value<'x>,
+        predicate: impl FnOnce(&mut Tag::ArgValue) -> bool,
+        f: impl FnOnce(Tag::ArgValue) -> Tag::Value,
     ) -> &mut Self {
         self.try_put::<Tag>(|mut arg| {
             if predicate(&mut arg) {
@@ -155,9 +198,9 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
 
     /// Behaves similary to [`Self::put_with()`] when the function returns `Ok(_)`.
     /// When the function returns `Err(arg)`, the query will **not** be fulfilled.
-    pub fn try_put<Tag: TagFor<LTail>>(
+    pub fn try_put<Tag: TagFor<L>>(
         &mut self,
-        f: impl FnOnce(Tag::ArgValue<'x>) -> Result<Tag::Value<'x>, Tag::ArgValue<'x>>,
+        f: impl FnOnce(Tag::ArgValue) -> Result<Tag::Value, Tag::ArgValue>,
     ) -> &mut Self {
         if let Some(state) = self.downcast::<Tag>() {
             state.try_fulfill_with(|arg| f(arg).map_err(|e| (e, ())));
@@ -176,16 +219,6 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
         self.put::<Value<T>>(value())
     }
 
-    /// Attempts to fulfill the query with a `&'x T` marked with [`Ref<Value<T>>`].
-    pub fn put_ref<T: ?Sized + 'static>(&mut self, value: &'x T) -> &mut Self {
-        self.put::<Ref<Value<T>>>(value)
-    }
-
-    /// Attempts to fulfill the query with a `&'x mut T` marked with [`Mut<Value<T>>`].
-    pub fn put_mut<T: ?Sized + 'static>(&mut self, value: &'x mut T) -> &mut Self {
-        self.put::<Mut<Value<T>>>(value)
-    }
-
     /// Packs a context value of type `C` along with this query.
     ///
     /// The context will be consumed only when fulfilling the query.
@@ -194,7 +227,7 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     /// ## Example
     ///
     /// ```
-    /// use dynamic_provider::{Provide, Query};
+    /// use dynamic_provider::{Lt, Provide, Query};
     ///
     /// #[derive(Debug)]
     /// struct MyProvider {
@@ -203,8 +236,8 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     ///     z: Vec<u8>,
     /// }
     ///
-    /// impl<'x> Provide<'x> for MyProvider {
-    ///     fn provide(self, query: &mut Query<'_, 'x>) -> Option<Self> {
+    /// impl<'x> Provide<Lt!['x]> for MyProvider {
+    ///     fn provide(self, query: &mut Query<'_, Lt!['x]>) -> Option<Self> {
     ///         query
     ///             .using(self)
     ///             .put_value(|this| this.x)
@@ -222,7 +255,7 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     ///
     /// assert_eq!(my_provider.request_value::<String>().unwrap(), "Foo");
     /// ```
-    pub fn using<C>(&mut self, context: C) -> QueryUsing<'_, 'x, C, LTail> {
+    pub fn using<C>(&mut self, context: C) -> QueryUsing<'_, C, L> {
         QueryUsing {
             context: Some(context),
             query: self,
@@ -230,37 +263,63 @@ impl<'x, LTail: Lt> Query<'_, 'x, LTail> {
     }
 }
 
-/// Creates a [Query] expecting a value marked with `Tag` and passes it to the given function.
+impl<'x, L: Lt> Query<'_, Lt!['x, ..L]> {
+    /// Attempts to fulfill the query with a `&'x T` marked with [`Ref<Value<T>>`].
+    pub fn put_ref<T: ?Sized + 'static>(&mut self, value: &'x T) -> &mut Self {
+        self.put::<Ref<Value<T>>>(value)
+    }
+
+    /// Attempts to fulfill the query with a `&'x mut T` marked with [`Mut<Value<T>>`].
+    pub fn put_mut<T: ?Sized + 'static>(&mut self, value: &'x mut T) -> &mut Self {
+        self.put::<Mut<Value<T>>>(value)
+    }
+}
+
+/// Creates a [`Query`] expecting a value marked with `Tag` and passes it to the given function.
 ///
 /// Returns a pair of:
 /// 1. The value of type `R` returned by the given function.
 /// 1. `Some(_)` if the query was fulfilled, otherwise `None`
-pub fn with_query<'x, Tag: TagFor<LTail>, LTail: Lt, R>(
-    f: impl FnOnce(&mut Query<'_, 'x, LTail>) -> R,
-    arg: Tag::ArgValue<'x>,
-) -> (R, Option<Tag::Value<'x>>)
+pub fn with_query<Tag: TagFor<L>, L: Lt, R>(
+    block: impl FnOnce(&mut Query<'_, L>) -> R,
+    arg: Tag::ArgValue,
+) -> (R, Option<Tag::Value>)
 where {
-    let mut query = QueryGeneric::new::<Tag, LTail>(arg);
-    let out = f(&mut query as _);
+    let mut query = QueryGeneric::new::<Tag, L>(arg, |_| {});
+    let out = block(&mut query as _);
 
-    let value = match query.state {
-        QueryState::Value(value) => Some(value),
+    let value = match query.state.value {
+        QueryValue::Value(value) => Some(value),
         _ => None,
     };
 
     (out, value)
 }
 
+/// Creates a [`Query`] not expecting any particular tag, passes it to `block`,
+/// and calls `on_provide_attempt()` for every available [`TagId`].
+///
+/// Returns the value of type `R` returned by `block`.
+pub fn with_query_recording_tag_ids<L: Lt, R>(
+    block: impl FnOnce(&mut Query<'_, L>) -> R,
+    on_provide_attempt: impl FnMut(TagId),
+) -> R
+where {
+    let mut query = QueryGeneric::new::<MarkerTag<ShouldRecordAttempts>, L>((), on_provide_attempt);
+    block(&mut query as _)
+}
+
 /// Packs a context value of type `C` alongside the query that will be passed to a function
 /// fulfilling the query.
 ///
 /// See [`Query::using()`].
-pub struct QueryUsing<'q, 'x, C, L: Lt> {
-    query: &'q mut Query<'q, 'x, L>,
+#[must_use]
+pub struct QueryUsing<'q, C, L: Lt> {
+    query: &'q mut Query<'q, L>,
     context: Option<C>,
 }
 
-impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
+impl<C, L: Lt> QueryUsing<'_, C, L> {
     /// Releases the context value, if still available.
     ///
     /// Returns `Some(_)` if the query was not fulfilled, so the context was never used.
@@ -269,11 +328,31 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
         self.context
     }
 
+    /// Returns `true` if the query has been fulfilled and no values will be accepted in the future.
+    pub fn is_fulfilled(&self) -> bool {
+        self.query.is_fulfilled()
+    }
+
+    /// Returns `true` if this query would accept a value tagged with `Tag`.
+    ///
+    /// **Note**: this will return `false` if a value tagged with `Tag` _was_ expected and has been
+    /// fulfilled, as it will not accept additional values.
+    pub fn expects<Tag: TagFor<L>>(&self) -> bool {
+        self.query.expects::<Tag>()
+    }
+
+    /// Returns the [`TagId`] expected by this query.
+    ///
+    /// If this query has already been fulfilled, the returned ID is unspecified.
+    pub fn expected_tag_id(&self) -> TagId {
+        self.query.expected_tag_id()
+    }
+
     /// If the query is expecting `Tag`, call the given function with the [`TypedQuery`] and context.
     /// Returns `Some(R)` value if the query expected `Tag`, otherwise `None`.
     fn downcast_with<Tag: TagFor<L>, R>(
         &mut self,
-        f: impl FnOnce(&mut TypedQuery<Tag::Value<'x>, Tag::ArgValue<'x>>, C) -> R,
+        f: impl FnOnce(&mut TypedQuery<Tag::Value, Tag::ArgValue>, C) -> R,
     ) -> Option<R> {
         self.context.as_ref()?;
 
@@ -285,7 +364,7 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
     ///
     /// If `Tag` is not expected, the function will not be called and the context will not be used.
     /// Does nothing if the query has already been fulfilled.
-    pub fn put<Tag: TagFor<L>>(mut self, f: impl FnOnce(C) -> Tag::Value<'x>) -> Self {
+    pub fn put<Tag: TagFor<L>>(mut self, f: impl FnOnce(C) -> Tag::Value) -> Self {
         self.downcast_with::<Tag, _>(|state, cx| state.fulfill(f(cx)));
 
         self
@@ -298,7 +377,7 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
     /// Does nothing if the query has already been fulfilled.
     pub fn put_with_arg<Tag: TagFor<L>>(
         mut self,
-        f: impl FnOnce(Tag::ArgValue<'x>, C) -> Tag::Value<'x>,
+        f: impl FnOnce(Tag::ArgValue, C) -> Tag::Value,
     ) -> Self {
         self.downcast_with::<Tag, _>(|state, cx| state.fulfill_with(|arg| f(arg, cx)));
 
@@ -312,8 +391,8 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
     /// Does nothing if the query has already been fulfilled.
     pub fn put_where<Tag: TagFor<L>>(
         self,
-        predicate: impl FnOnce(&mut Tag::ArgValue<'x>, &mut C) -> bool,
-        f: impl FnOnce(Tag::ArgValue<'x>, C) -> Tag::Value<'x>,
+        predicate: impl FnOnce(&mut Tag::ArgValue, &mut C) -> bool,
+        f: impl FnOnce(Tag::ArgValue, C) -> Tag::Value,
     ) -> Self {
         self.try_put_with_arg::<Tag>(|mut arg, mut cx| {
             if predicate(&mut arg, &mut cx) {
@@ -326,7 +405,7 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
 
     /// Behaves like [`Self::put()`] when the given function returns `Ok(_)`.
     /// When the function returns `Err(context)`, the query is **not** fulfilled and the context will be usable again.
-    pub fn try_put<Tag: TagFor<L>>(self, f: impl FnOnce(C) -> Result<Tag::Value<'x>, C>) -> Self {
+    pub fn try_put<Tag: TagFor<L>>(self, f: impl FnOnce(C) -> Result<Tag::Value, C>) -> Self {
         self.try_put_with_arg::<Tag>(|arg, cx| f(cx).map_err(|cx| (arg, cx)))
     }
 
@@ -334,7 +413,7 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
     /// When the function returns `Err((arg, context))`, the query is **not** fulfilled and the context will be usable again.
     pub fn try_put_with_arg<Tag: TagFor<L>>(
         mut self,
-        f: impl FnOnce(Tag::ArgValue<'x>, C) -> Result<Tag::Value<'x>, (Tag::ArgValue<'x>, C)>,
+        f: impl FnOnce(Tag::ArgValue, C) -> Result<Tag::Value, (Tag::ArgValue, C)>,
     ) -> Self {
         self.context = self
             .downcast_with::<Tag, _>(|state, cx| state.try_fulfill_with(|arg| f(arg, cx)))
@@ -352,6 +431,22 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
         self.put::<Value<T>>(f)
     }
 
+    /// Temporarily add another value to the context for the duration of the call to `block`.
+    /// After `block` is finished the new context will be dropped if it hasn't been used.
+    fn add_and_drop_context<C2>(
+        mut self,
+        new_context: C2,
+        block: impl for<'q2> FnOnce(QueryUsing<'q2, (C, C2), L>) -> QueryUsing<'q2, (C, C2), L>,
+    ) -> Self {
+        self.context = self
+            .context
+            .and_then(|cx| block(self.query.using((cx, new_context))).finish())
+            .map(|(cx, _)| cx);
+        self
+    }
+}
+
+impl<'x, C, L: Lt> QueryUsing<'_, C, Lt!['x, ..L]> {
     /// Attempts to fulfill the query using a function accepting `C` and returning a `&'x T` marked by
     /// [`Ref<Value<T>>`].
     ///
@@ -368,20 +463,6 @@ impl<'x, C, L: Lt> QueryUsing<'_, 'x, C, L> {
     /// Does nothing if the query has already been fulfilled.
     pub fn put_mut<T: 'static + ?Sized>(self, f: impl FnOnce(C) -> &'x mut T) -> Self {
         self.put::<Mut<Value<T>>>(f)
-    }
-
-    /// Temporarily add another value to the context for the duration of the call to `block`.
-    /// After `block` is finished the new context will be dropped if it hasn't been used.
-    fn add_and_drop_context<C2>(
-        mut self,
-        new_context: C2,
-        block: impl for<'q2> FnOnce(QueryUsing<'q2, 'x, (C, C2), L>) -> QueryUsing<'q2, 'x, (C, C2), L>,
-    ) -> Self {
-        self.context = self
-            .context
-            .and_then(|cx| block(self.query.using((cx, new_context))).finish())
-            .map(|(cx, _)| cx);
-        self
     }
 
     /// Attempts to fulfill the query using a function accepting `C` and returning a `&'x T`.

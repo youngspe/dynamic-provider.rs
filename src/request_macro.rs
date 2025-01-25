@@ -1,3 +1,5 @@
+#![allow(unused_parens)]
+
 /// ## Usage
 ///
 /// ```
@@ -21,7 +23,7 @@
 ///         in 'x, 'y, '_;
 ///
 ///         // Request by tag with arg:
-///         tag x: TagWithArg where arg = &arg_value => x,
+///         tag x: TagWithArg where arg <- &arg_value => x,
 ///
 ///         // Request by tag without arg:
 ///         tag x: TagWithoutArg => x,
@@ -222,7 +224,7 @@ macro_rules! __request_rules {
         @helper = $helper:ident;
         @tokens = {
             $pat:tt: $Ty:ty
-            $(where arg = $arg:expr)?
+            $(where arg <- $arg:expr)?
             => $out:expr
             $(, $($rest:tt)*)?
         };
@@ -295,7 +297,7 @@ mod test {
                 from &mut *p;
                 in 'x, 'y, '_;
                 x: i32 => x,
-                tag x: Foo where arg = &b => x + a,
+                tag x: Foo where arg <- &b => x + a,
                 ref mut x => *x,
                 ref y => *y,
                 else => 0,
@@ -304,15 +306,12 @@ mod test {
 
         fn implicit_lts(p: &mut dyn for<'i> crate::ProvideRef<crate::Lt!['_, 'i]>) -> i32 {
             let a = 0;
-
-            crate::define_tag! {
-                tag Foo: for<'x, 'y, 'z> i32 => i32;
-            }
+            let b = 1;
 
             request! {
                 from &mut *p;
                 x: i32 => x,
-                tag x: Foo where arg = 1 => x + a,
+                tag x: Foo where arg <- &b => x + a,
                 ref mut x => *x,
                 ref y => *y,
                 else => 0,
@@ -321,7 +320,7 @@ mod test {
 
         fn check_both(p: &mut dyn for<'i> crate::ProvideRef<crate::Lt!['_, 'i]>) -> i32 {
             let out1 = explicit_lts(p);
-            let out2 = explicit_lts(p);
+            let out2 = implicit_lts(p);
             assert_eq!(out1, out2);
             out1
         }
@@ -330,16 +329,13 @@ mod test {
         struct CustomProvide(
             i32,
             for<'q, 'x, 'y, 'z> fn(
-                QueryUsing<'q, 'x, &'x mut i32, Lt!['y, 'z]>,
-            ) -> QueryUsing<'q, 'x, &'x mut i32, Lt!['y, 'z]>,
+                QueryUsing<'q, &'x mut i32, Lt!['x, 'y, 'z]>,
+            ) -> QueryUsing<'q, &'x mut i32, Lt!['x, 'y, 'z]>,
         );
 
         impl ProvideRef<Lt!['_, '_]> for CustomProvide {
-            fn provide_mut<'this>(
-                &'this mut self,
-                query: &mut crate::Query<'_, 'this, Lt!['_, '_]>,
-            ) {
-                self.1(query.using(&mut self.0));
+            fn provide_mut<'this>(&'this mut self, query: &mut crate::Query<Lt!['this, '_, '_]>) {
+                self.1(query.using(&mut self.0)).finish();
             }
         }
 

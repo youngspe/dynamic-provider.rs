@@ -2,6 +2,17 @@
 name = "dynamic-provider"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/youngspe/dynamic-provider.rs"
+authors = ["Spencer Young"]
+description = "Dynamically request arbitrarily-typed values from providers"
+license = "MIT"
+
+# Uses associated type bounds
+rust-version = "1.79"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
+# Enables 'ProvideBox' and impls for Box, Rc, Arc, String
 alloc = []

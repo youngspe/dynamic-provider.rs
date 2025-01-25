@@ -282,11 +282,10 @@ macro_rules! __define_tag {
 
     { @associated_types for<$($lt:lifetime),*> $In:ty => $Out:ty } => {
         type Arg = $crate::TypeFn![for<$($lt),*> $In];
-        type Def = $crate::TypeFn![for<$($lt),*> $Out];
+        type Out = $crate::TypeFn![for<$($lt),*> $Out];
     };
     { @associated_types for<$($lt:lifetime),*> $Out:ty } => {
         type Arg = ();
-        type Def = $crate::TypeFn![for<$($lt),*> $Out];
+        type Out = $crate::TypeFn![for<$($lt),*> $Out];
     };
 }
-
