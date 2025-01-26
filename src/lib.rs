@@ -1,8 +1,17 @@
+// Override the links in the README:
+//! [`TypeFn!`]: macro@TypeFn
+//! [`TypeFn`]: trait@TypeFn
+//! [`Lt!`]: macro@Lt
+//! [`Lt`]: trait@Lt
+//! [`Provide`]: trait@Provide
+//! [`ProvideRef`]: trait@ProvideRef
+//! [`Query`]: struct@Query
+//! [provide-method]: Provide::provide
+#![doc = include_str!("../README.md")]
 #![no_std]
 #![warn(missing_docs)]
-#![doc = include_str!("../README.md")]
 
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", doc))]
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
@@ -22,9 +31,13 @@ pub use provide::{
     for_each_provided_tag_id, get_provided_tag_ids, provide_by_ref_with, provide_with,
     when_provider, Provide, ProvideRef, WhenProvider,
 };
-pub use query::{with_query, with_query_recording_tag_ids, Query, QueryUsing};
-pub use tag::{Mut, Ref, TagId, TypeTag, Value};
+#[doc(inline)]
+pub use query::{Query, QueryUsing};
+pub use tag::{Mut, Ref, TagFor, TagId, TypeTag, Value};
 pub use type_fn::TypeFn;
+
+#[cfg(feature = "alloc")]
+pub use feature_alloc::ProvideBox;
 
 /// Dependencies for macros to reference via `$crate::__m::*`.
 #[doc(hidden)]

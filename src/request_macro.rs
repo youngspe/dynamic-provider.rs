@@ -1,5 +1,10 @@
 #![allow(unused_parens)]
 
+/// Requests one of a set of possible values, refs, or tags from a provider.
+///
+/// If a value is found, its branch will be evaluated and none of the subsequent
+/// values will be requested from the provider.
+///
 /// ## Usage
 ///
 /// ```

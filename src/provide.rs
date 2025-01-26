@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    query::{with_query, with_query_recording_tag_ids, QueryUsing},
+    query::QueryUsing,
     tag::{Mut, Ref, TagFor, Value},
     Lt, Query, TagId,
 };
@@ -25,7 +25,7 @@ pub trait Provide<L: Lt = ()>: Sized {
     /// `arg` should contain whatever data is needed to request the tagged type.
     /// If no arguments are necessary, this will usually be the unit type `()`.
     fn request<Tag: TagFor<L>>(self, arg: Tag::ArgValue) -> Result<Tag::Value, Self> {
-        match with_query::<Tag, L, _>(|q| self.provide(q), arg) {
+        match Query::new_with::<Tag, _>(|q| self.provide(q), arg) {
             (_, Some(value)) => Ok(value),
             (Some(this), None) => Err(this),
             (None, None) => panic!("'self' not returned when 'provide' failed"),
@@ -63,7 +63,7 @@ impl<L: Lt, P: Provide<L>> Provide<L> for Option<P> {
     }
 
     fn request<Tag: TagFor<L>>(self, arg: Tag::ArgValue) -> Result<Tag::Value, Self> {
-        match with_query::<Tag, L, _>(|q| self?.provide(q), arg) {
+        match Query::new_with::<Tag, _>(|q| self?.provide(q), arg) {
             (_, Some(value)) => Ok(value),
             (this, None) => Err(this),
         }
@@ -86,8 +86,11 @@ impl<LTail: Lt, P: ProvideRef<LTail>> ProvideRef<LTail> for &mut Option<P> {
 
 /// Provides access to values of arbitrary type from a reference.
 ///
-/// Requested values are specified using a [`TypeTag`][crate::TypeTag] implementation, or to be more specific, a [`TagFor<LTail>`]
+/// Requested values are specified using a [`TypeTag`][crate::TypeTag] implementation,
+/// or to be more specific, a [`TagFor<LTail>`]
 /// implementation.
+///
+/// `ProvideRef` implementations autmatically implement [`Provide<Lt!['x, ..LTail]>`][Provide] for all `'x`.
 pub trait ProvideRef<LTail: Lt = ()> {
     /// Supplies the requested value to the given [`Query`] from a shared reference to `Self`, if available.
     ///
@@ -511,7 +514,7 @@ pub fn for_each_provided_tag_id<L: Lt, P: Provide<L>>(
     provider: P,
     on_provide_attempt: impl FnMut(TagId),
 ) -> P {
-    with_query_recording_tag_ids(|q| provider.provide(q), on_provide_attempt).unwrap()
+    Query::capture_tag_ids(|q| provider.provide(q), on_provide_attempt).unwrap()
 }
 
 /// Given a provider, creates a collection of [`TagId`]s it provides.
@@ -520,11 +523,11 @@ pub fn for_each_provided_tag_id<L: Lt, P: Provide<L>>(
     feature = "alloc",
     doc = r#"
 ```
-use dynamic_provider::{Mut, Ref, TagId, Value};
+use dynamic_provider::{Lt, Mut, Ref, TagId, Value};
 
 let provider = String::from("Hello, world!");
 
-let tag_ids: Vec<_> = dynamic_provider::get_provided_tag_ids::<(), _>(&provider);
+let tag_ids = dynamic_provider::get_provided_tag_ids::<Lt!['_], Vec<_>>(&provider);
 
 assert!(tag_ids.contains(&TagId::of::<Ref<Value<str>>>()));
 assert!(tag_ids.contains(&TagId::of::<Ref<Value<[u8]>>>()));

@@ -3,18 +3,27 @@ use alloc::{boxed::Box, rc::Rc, string::String, sync::Arc};
 
 /// Provides values from a [`Box`].
 pub trait ProvideBox<LTail: Lt = ()> {
+    /// Requests that the inner provided fulfill the query.
+    ///
+    /// If the request fails, a `Box<dyn ProvideBox<LTail>` is returned.
     fn provide_box<'this>(
         self: Box<Self>,
         query: &mut Query<'_, LTail>,
     ) -> Option<Box<dyn ProvideBox<LTail> + 'this>>
     where
         Self: 'this;
+    /// Requests that the inner provided fulfill the query.
+    ///
+    /// If the request fails, a `Box<dyn ProvideBox<LTail> + Send` is returned.
     fn provide_box_send<'this>(
         self: Box<Self>,
         query: &mut Query<'_, LTail>,
     ) -> Option<Box<dyn ProvideBox<LTail> + 'this + Send>>
     where
         Self: 'this + Send;
+    /// Requests that the inner provided fulfill the query.
+    ///
+    /// If the request fails, a `Box<dyn ProvideBox<LTail> + Send + Sync` is returned.
     fn provide_box_send_sync<'this>(
         self: Box<Self>,
         query: &mut Query<'_, LTail>,

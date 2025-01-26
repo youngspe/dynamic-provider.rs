@@ -1,8 +1,13 @@
+/// Declares one or more [`TypeTag`][crate::TypeTag] implementations.
+///
 /// ```
 /// # use dynamic_provider::define_tag;
 /// use core::ops::Deref;
 ///
 /// define_tag! {
+///     /// Tag describing a numeric status code.
+///     pub tag StatusCode: i32;
+///
 ///     /// Tag describing a pair of references to `T` and the target of `U`.
 ///     pub tag RefPair<T, U>: for<'x> (&'x T, &'x U::Target) where U: Deref;
 ///
@@ -13,18 +18,21 @@
 #[macro_export]
 macro_rules! define_tag {
     {} => {};
-    { $(
+    {
         $(#$attr:tt)*
         $vis:vis tag $Name:ident $(<$($T:ident),* $(,)?>)? : for<$($lt:lifetime),* $(,)?> $T1:ty $( => $T2:ty )? ;
-    )+ } => {
-        $($crate::__define_tag! {
+        $($rest:tt)*
+    } => {
+        $crate::__define_tag! {
             @lt_generics = {};
-            @generics = { $($T,)* };
-            @lt_generics_with_bounds = { $($T,)* };
-            @generics_with_bounds = {};
+            @generics = { $($($T,)*)? };
+            @lt_generics_with_bounds = {};
+            @generics_with_bounds = { $($T,)* };
             @attrs = { $($attr)* };
             $vis tag $Name<>: for<$($lt),*> $T1 $(=> $T2)?;
-        })*
+        }
+
+        $crate::define_tag! { $($rest)* };
     };
     {
         $(#$attr:tt)*
@@ -37,6 +45,19 @@ macro_rules! define_tag {
             @generics_with_bounds = {};
             @attrs = { $($attr)* };
             $vis tag $Name < $($rest)*
+        }
+    };
+    {
+        $(#$attr:tt)*
+        $vis:vis tag $Name:ident : $($rest:tt)*
+    } => {
+        $crate::__define_tag! {
+            @lt_generics = {};
+            @generics = {};
+            @lt_generics_with_bounds = {};
+            @generics_with_bounds = {};
+            @attrs = { $($attr)* };
+            $vis tag $Name<>: $($rest)*
         }
     };
 }
@@ -277,6 +298,50 @@ macro_rules! __define_tag {
             @generics_with_bounds = $gen_bounds;
             @attrs = $attrs;
             $vis tag $Name : for<$($lt),*> $T1 $(=> $T2)? where $($rest)*
+        }
+    };
+
+    // handle a missing for<> qualifier
+    {
+        @where = $where:tt;
+        @lt_generics = $lt_gen:tt;
+        @generics = $gen:tt;
+        @lt_generics_with_bounds = $lt_gen_bounds:tt;
+        @generics_with_bounds = $gen_bounds:tt;
+        @attrs = $attrs:tt;
+        $vis:vis tag $Name:ident : $T1:ty $(=> $T2:ty)?
+        ;
+        $($rest:tt)*
+    } => {
+        $crate::__define_tag! {
+            @where = $where;
+            @lt_generics = $lt_gen;
+            @generics = $gen;
+            @lt_generics_with_bounds = $lt_gen_bounds;
+            @generics_with_bounds = $gen_bounds;
+            @attrs = $attrs;
+            $vis tag $Name : for<> $T1 $(=> $T2)? ; $($rest)*
+        }
+    };
+    {
+        @where = $where:tt;
+        @lt_generics = $lt_gen:tt;
+        @generics = $gen:tt;
+        @lt_generics_with_bounds = $lt_gen_bounds:tt;
+        @generics_with_bounds = $gen_bounds:tt;
+        @attrs = $attrs:tt;
+        $vis:vis tag $Name:ident : $T1:ty $(=> $T2:ty)?
+        where
+        $($rest:tt)*
+    } => {
+        $crate::__define_tag! {
+            @where = $where;
+            @lt_generics = $lt_gen;
+            @generics = $gen;
+            @lt_generics_with_bounds = $lt_gen_bounds;
+            @generics_with_bounds = $gen_bounds;
+            @attrs = $attrs;
+            $vis tag $Name : for<> $T1 $(=> $T2)? where $($rest)*
         }
     };
 

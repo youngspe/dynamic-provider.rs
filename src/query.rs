@@ -52,16 +52,25 @@ impl<T, Arg> TypedQuery<T, Arg> {
     }
 
     fn try_fulfill_with<R>(&mut self, f: impl FnOnce(Arg) -> Result<T, (Arg, R)>) -> Option<R> {
+        if !matches!(self.inner.state.value, QueryValue::Arg { .. }) {
+            return None;
+        }
+
         let QueryValue::Arg(arg) = mem::take(&mut self.inner.state.value) else {
             return None;
         };
-        let out;
-        (out, self.inner.state.value) = match f(arg) {
-            Ok(value) => (None, QueryValue::Value(value)),
-            Err((arg, out)) => (Some(out), QueryValue::Arg(arg)),
-        };
-        self.inner.tag_id = TagId::of::<MarkerTag<AlreadyFulfilled>>();
-        out
+
+        match f(arg) {
+            Ok(value) => {
+                self.inner.state.value = QueryValue::Value(value);
+                self.inner.tag_id = TagId::of::<MarkerTag<AlreadyFulfilled>>();
+                None
+            }
+            Err((arg, out)) => {
+                self.inner.state.value = QueryValue::Arg(arg);
+                Some(out)
+            }
+        }
     }
 }
 
@@ -109,21 +118,67 @@ impl<T, Arg, F> QueryGeneric<QueryState<T, Arg, F>> {
     }
 }
 
-/// A type-erased query ready to pass to [`crate::Provide::provide()`].
+/// A type-erased query ready to pass to [`Provide::provide()`][fn@crate::Provide::provide].
 ///
 /// Providers may use this type to supply tagged values.
-pub type Query<'data, L = ()> = QueryGeneric<dyn ErasedQueryState<L> + 'data>;
+#[repr(transparent)]
+pub struct Query<'data, L: Lt = ()> {
+    q: QueryGeneric<dyn ErasedQueryState<L> + 'data>,
+}
 
-impl<L: Lt> Query<'_, L> {
+impl<'data, L: Lt> Query<'data, L> {
+    /// Creates a `Query` expecting a value marked with `Tag` and passes it to the given function.
+    ///
+    /// Returns a pair of:
+    /// 1. The value of type `R` returned by the given function.
+    /// 1. `Some(_)` if the query was fulfilled, otherwise `None`
+    pub fn new_with<Tag, R>(
+        block: impl FnOnce(&mut Query<'data, L>) -> R,
+        arg: Tag::ArgValue,
+    ) -> (R, Option<Tag::Value>)
+    where
+        Tag: TagFor<L, ArgValue: 'data, Value: 'data>,
+    {
+        let mut query = QueryGeneric::new::<Tag, L>(arg, |_| {});
+        let out = block(Query::new_mut(&mut query as _));
+
+        let value = match query.state.value {
+            QueryValue::Value(value) => Some(value),
+            _ => None,
+        };
+
+        (out, value)
+    }
+
+    /// Creates a `Query` that does not expect any value, passes it to `block`,
+    /// and calls `on_provide_attempt()` for every available [`TagId`].
+    ///
+    /// Returns the value of type `R` returned by `block`.
+    pub fn capture_tag_ids<R>(
+        block: impl FnOnce(&mut Query<'data, L>) -> R,
+        on_provide_attempt: impl FnMut(TagId) + 'data,
+    ) -> R
+where {
+        let mut query =
+            QueryGeneric::new::<MarkerTag<ShouldRecordAttempts>, L>((), on_provide_attempt);
+        block(Query::new_mut(&mut query as _))
+    }
+
+    fn new_mut<'this>(
+        data: &'this mut QueryGeneric<dyn ErasedQueryState<L> + 'data>,
+    ) -> &'this mut Self {
+        unsafe { &mut *(data as *mut _ as *mut Self) }
+    }
+
     fn downcast<Tag: TagFor<L>>(&mut self) -> Option<&mut TypedQuery<Tag::Value, Tag::ArgValue>> {
         let tag_id = TagId::of::<Tag>();
 
-        if self.tag_id == TagId::of::<MarkerTag<ShouldRecordAttempts>>() {
-            self.state.record_attempt(tag_id);
+        if self.q.tag_id == TagId::of::<MarkerTag<ShouldRecordAttempts>>() {
+            self.q.state.record_attempt(tag_id);
             return None;
         }
 
-        if self.tag_id == tag_id {
+        if self.q.tag_id == tag_id {
             // SAFETY: `Tag` is the same type used to create this query, so the underlying type should be
             // TypedQuery<Tag::Value, Tag::ArgValue>
             let query =
@@ -137,7 +192,7 @@ impl<L: Lt> Query<'_, L> {
 
     /// Returns `true` if the query has been fulfilled and no values will be accepted in the future.
     pub fn is_fulfilled(&self) -> bool {
-        self.tag_id == TagId::of::<MarkerTag<AlreadyFulfilled>>()
+        self.q.tag_id == TagId::of::<MarkerTag<AlreadyFulfilled>>()
     }
 
     /// Returns `true` if this query would accept a value tagged with `Tag`.
@@ -145,14 +200,14 @@ impl<L: Lt> Query<'_, L> {
     /// **Note**: this will return `false` if a value tagged with `Tag` _was_ expected and has been
     /// fulfilled, as it will not accept additional values.
     pub fn expects<Tag: TagFor<L>>(&self) -> bool {
-        self.tag_id == TagId::of::<Tag>()
+        self.q.tag_id == TagId::of::<Tag>()
     }
 
     /// Returns the [`TagId`] expected by this query.
     ///
     /// If this query has already been fulfilled, the returned ID is unspecified.
     pub fn expected_tag_id(&self) -> TagId {
-        self.tag_id
+        self.q.tag_id
     }
 
     /// Attempts to fulfill the query with a value marked with `Tag`.
@@ -255,11 +310,20 @@ impl<L: Lt> Query<'_, L> {
     ///
     /// assert_eq!(my_provider.request_value::<String>().unwrap(), "Foo");
     /// ```
-    pub fn using<C>(&mut self, context: C) -> QueryUsing<'_, C, L> {
-        QueryUsing {
-            context: Some(context),
-            query: self,
+    pub fn using<C>(&mut self, context: C) -> QueryUsing<C, L> {
+        // TODO: figure out why I need to wrap this in a function to avoid "lifetime may not live
+        // long enough"
+        fn inner<'q, L: Lt, C>(
+            this: &'q mut QueryGeneric<dyn ErasedQueryState<L> + '_>,
+            context: C,
+        ) -> QueryUsing<'q, C, L> {
+            QueryUsing {
+                context: Some(context),
+                query: Query::new_mut(this as _),
+            }
         }
+
+        inner(&mut self.q, context)
     }
 }
 
@@ -273,40 +337,6 @@ impl<'x, L: Lt> Query<'_, Lt!['x, ..L]> {
     pub fn put_mut<T: ?Sized + 'static>(&mut self, value: &'x mut T) -> &mut Self {
         self.put::<Mut<Value<T>>>(value)
     }
-}
-
-/// Creates a [`Query`] expecting a value marked with `Tag` and passes it to the given function.
-///
-/// Returns a pair of:
-/// 1. The value of type `R` returned by the given function.
-/// 1. `Some(_)` if the query was fulfilled, otherwise `None`
-pub fn with_query<Tag: TagFor<L>, L: Lt, R>(
-    block: impl FnOnce(&mut Query<'_, L>) -> R,
-    arg: Tag::ArgValue,
-) -> (R, Option<Tag::Value>)
-where {
-    let mut query = QueryGeneric::new::<Tag, L>(arg, |_| {});
-    let out = block(&mut query as _);
-
-    let value = match query.state.value {
-        QueryValue::Value(value) => Some(value),
-        _ => None,
-    };
-
-    (out, value)
-}
-
-/// Creates a [`Query`] not expecting any particular tag, passes it to `block`,
-/// and calls `on_provide_attempt()` for every available [`TagId`].
-///
-/// Returns the value of type `R` returned by `block`.
-pub fn with_query_recording_tag_ids<L: Lt, R>(
-    block: impl FnOnce(&mut Query<'_, L>) -> R,
-    on_provide_attempt: impl FnMut(TagId),
-) -> R
-where {
-    let mut query = QueryGeneric::new::<MarkerTag<ShouldRecordAttempts>, L>((), on_provide_attempt);
-    block(&mut query as _)
 }
 
 /// Packs a context value of type `C` alongside the query that will be passed to a function
@@ -487,13 +517,13 @@ impl<'x, C, L: Lt> QueryUsing<'_, C, Lt!['x, ..L]> {
 
     /// Attempts to fulfill the query using a function accepting `C` and returning a `&'x T`.
     /// This will supply the `&'x T` marked by [`Ref<Value<T>>`]
-    /// as well as the [`T::Owned`][alloc::borrow::ToOwned::Owned] marked by [`Value<T::Owned>`][Value<>]
+    /// as well as the [`T::Owned`][alloc::borrow::ToOwned::Owned] marked by [`Value<T::Owned>`][Value]
     /// using `T's` [`ToOwned`][alloc::borrow::ToOwned] implementation.
     ///
     /// If neither the reference nor the owned value are expected,
     /// the function will not be called and the context will not be used.
     /// Does nothing if the query has already been fulfilled.
-    #[cfg(feature = "alloc")]
+    #[cfg(any(feature = "alloc", doc))]
     pub fn put_ownable<T>(self, f: impl FnOnce(C) -> &'x T) -> Self
     where
         T: 'static + ?Sized + alloc::borrow::ToOwned,

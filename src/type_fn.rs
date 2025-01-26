@@ -14,7 +14,7 @@ where
 
 /// Represents a type that is parameterized over one or more lifetime variables.
 ///
-/// When a type implementing `TypeFn` is needed, it is usually best to use [`TypeFn!`]
+/// When a type implementing `TypeFn` is needed, it is usually best to use [`TypeFn!`][trait@TypeFn]
 /// rather than manually implement `TypeFn`.
 ///
 /// ## Note
