@@ -1,4 +1,19 @@
-Dynamically request arbitrarily-typed values from providers.
+Dynamically request arbitrarily-typed values from providers with borrowed data.
+
+## Motivation
+
+Rust's `Any` trait allows for downcasting to access the underlying type of a `dyn` object. Unfortunately, this is limited to `'static` types (types that contain no borrowed data) because there's no way to distinguish types with different lifetimes by their `TypeId`s.
+
+This crate provides the dynamically-sized [`Query`] type with lifetime parameters and an internal tag indicating what type of value it's meant to hold,
+potentially containing those lifetimes.
+
+The [`Provide`] and [`ProvideRef`] traits supply values to queries, the latter being `dyn`-capable.
+
+### Prior Art
+
+- [Rust RFC 3192](https://rust-lang.github.io/rfcs/3192-dyno.html)
+- https://github.com/nrc/provide-any
+- https://crates.io/crates/supply
 
 ## Concepts
 
@@ -40,6 +55,7 @@ type RefPair<A, B> = dynamic_provider::TypeFn![for<'a, 'b> (&'a A, &'b B)];
 <details open><summary>
 
 ### Type tags
+
 </summary>
 
 ```rust
@@ -53,6 +69,7 @@ dynamic_provider::define_tag! {
 <details open><summary>
 
 ### Providers
+
 </summary>
 
 <dl><dt>
@@ -136,4 +153,3 @@ assert!(get_field::<str>(&(), "foo").is_none());
 [`ProvideRef`]: #providers
 [provide-method]: #providers
 [`Query`]: #
-
