@@ -1,12 +1,15 @@
 // Override the links in the README:
-//! [`TypeFn!`]: macro@TypeFn
-//! [`TypeFn`]: trait@TypeFn
-//! [`Lt!`]: macro@Lt
+//! [`define_tag!`]: macro@define_tag
+//! [provide-method]: Provide::provide
 //! [`Lt`]: trait@Lt
+//! [`Lt!`]: macro@Lt
 //! [`Provide`]: trait@Provide
+//! [`ProvideBox`]: trait@ProvideBox
 //! [`ProvideRef`]: trait@ProvideRef
 //! [`Query`]: struct@Query
-//! [provide-method]: Provide::provide
+//! [`ResourceTag`]: trait@ResourceTag
+//! [`TypeFn!`]: macro@TypeFn
+//! [`TypeFn`]: trait@TypeFn
 #![doc = include_str!("../README.md")]
 #![no_std]
 #![warn(missing_docs)]
@@ -26,14 +29,14 @@ mod tag_macro;
 #[doc(hidden)]
 pub mod type_fn;
 
-pub use lt::Lt;
+pub use lt::{LifetimeHkt, Lt};
 pub use provide::{
     for_each_provided_tag_id, get_provided_tag_ids, provide_by_ref_with, provide_with,
     when_provider, Provide, ProvideRef, WhenProvider,
 };
 #[doc(inline)]
 pub use query::{Query, QueryUsing};
-pub use tag::{Mut, Ref, TagFor, TagId, TypeTag, Value};
+pub use tag::{Mut, Ref, ResourceTag, TagFor, TagId, Value};
 pub use type_fn::TypeFn;
 
 #[cfg(feature = "alloc")]

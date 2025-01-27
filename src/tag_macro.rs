@@ -1,4 +1,4 @@
-/// Declares one or more [`TypeTag`][crate::TypeTag] implementations.
+/// Declares one or more [`ResourceTag`][crate::ResourceTag] implementations.
 ///
 /// ```
 /// # use dynamic_provider::define_tag;
@@ -244,7 +244,7 @@ macro_rules! __define_tag {
             _infallible: $crate::__m::Infallible,
         }
 
-        impl < $($lt_gen_bounds)* $($gen_bounds)* > $crate::TypeTag for $Name<$($lt_gen,)* $($gen,)*>
+        impl < $($lt_gen_bounds)* $($gen_bounds)* > $crate::ResourceTag for $Name<$($lt_gen,)* $($gen,)*>
         where
             $($lt_gen: 'static,)*
             $($gen: 'static,)*

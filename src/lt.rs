@@ -12,7 +12,28 @@ pub trait _LifetimeHktOf<'lt>: sealed::LifetimeHkt {
     type T: ?Sized;
 }
 
+/// Represents a type parameterized by a single lifetime.
+/// The [`LifetimeHkt!`][macro@crate::LifetimeHkt] macro is used to get an implementation of this trait.
+///
+/// Implements [`TypeFn`][trait@crate::TypeFn] when `Actual<'x>: TypeFn`.
+///
+/// For example, the following type:
+///
+/// ```
+/// use dynamic_provider::{LifetimeHkt, Value};
+///
+/// type MyTypeFn<T, U, V> = LifetimeHkt![
+///     for<'x> LifetimeHkt![
+///         for<'y> LifetimeHkt![
+///             for<'z> Value<(&'x T, &'y U, &'z V)>
+///         ]
+///     ]
+/// ];
+/// ```
+///
+/// is equivalent to: `TypeFn![for<'x, 'y, 'z> (&'x T, &'y U, &'z V)]`.
 pub trait LifetimeHkt {
+    /// The described type, given lifetime parameter `'x`.
     type Actual<'x>: ?Sized;
 }
 
@@ -90,7 +111,7 @@ macro_rules! Lt {
     (..$Ty:ty) => { $Ty };
 }
 
-/// Evaluates to a [`LifetimeHkt`] implementation.
+/// Evaluates to a [`LifetimeHkt`][trait@LifetimeHkt] implementation.
 ///
 /// ## Usage
 ///

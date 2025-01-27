@@ -12,22 +12,23 @@ The [`Provide`] and [`ProvideRef`] traits supply values to queries, the latter b
 ### Prior Art
 
 - [Rust RFC 3192](https://rust-lang.github.io/rfcs/3192-dyno.html)
-- https://github.com/nrc/provide-any
-- https://crates.io/crates/supply
+  - [implementation](https://github.com/nrc/provide-any) by [@nrc](https://github.com/nrc)
+- [supply](https://crates.io/crates/supply) by [konnorandrews](https://github.com/konnorandrews)
 
 ## Concepts
 
 <details open><summary>
 
 ### Lifetime lists
+
 </summary>
 
 Lists of lifetime variables are represented by types implementing [`Lt`].
 You can describe a lifetime list with the [`Lt!`] macro:
 
-
 ```rust
 use dynamic_provider::Lt;
+
 /// Lifetime list for retrieving values from `'data` with an argument that
 /// borrows `'input`.
 type CustomLifetimes<'data, 'input> = Lt!['data, 'input];
@@ -40,6 +41,7 @@ type PrependLifetime<'local, L> = Lt!['local, ..L];
 <details open><summary>
 
 ### Type functions
+
 </summary>
 
 [`TypeFn`] implementations describe a type that is parameterized over an arbitrary
@@ -54,14 +56,22 @@ type RefPair<A, B> = dynamic_provider::TypeFn![for<'a, 'b> (&'a A, &'b B)];
 </details>
 <details open><summary>
 
-### Type tags
+### Resource tags
 
 </summary>
 
+[`ResourceTag`] implementations describe how values may be provided to a [`Query`].
+The trait has two associated [`TypeFn`]s: `Arg`, which determines what values are needed to request the resource,
+and `Out`, which defines the type of the resource value.
+
+The [`define_tag!`] macro provides a convenient way to declare resource tags:
+
 ```rust
 dynamic_provider::define_tag! {
+    // syntax:
+    // [pub] tag NAME[<...GENERICS>]: [for<...LIFETIMES>] [ARG =>] OUT [where BOUNDS];
+    pub tag Field<T>: for<'data, 'key> &'key str => &'data T where T: ?Sized;
     pub tag StatusCode: i32;
-    pub tag Field<T: ?Sized>: for<'data, 'key> &'key str => &'data T;
 }
 ```
 
@@ -75,22 +85,29 @@ dynamic_provider::define_tag! {
 <dl><dt>
 
 [`Provide<L>`][`Provide`]
+
 </dt><dd>
 
 Supplies values with the lifetime variables in `L` to the [`Query`] object passed to the
 [`provide()`][provide-method] method.
+
 </dd><dt>
 
 [`ProvideRef<L>`][`ProvideRef`]
+
 </dt><dd>
 
 Supplies values from a reference to `Self` with the lifetime of the reference and the lifetime
 variables in `L`.
-Each implementation automatically implements `Provider<'x, ..L>` for all `'x`.
+
+A reference to a `Provide` implementation (say, `&'x impl ProvideRef<L>` or `&'x mut impl ProvideRef<L>`) automatically implements `Provide<'x, ..L>` for all `'x`.
+
 </dd></dl>
 </details>
 
-## Example
+## Examples
+
+### Dynamic field access
 
 ```rust
 use dynamic_provider::{define_tag, request, Lt, Provide, ProvideRef, Query};
@@ -145,11 +162,22 @@ assert_eq!(get_field::<[u8]>(&data, "baz").unwrap(), b"baz!");
 assert!(get_field::<str>(&(), "foo").is_none());
 ```
 
-[`TypeFn!`]: #type-functions
-[`TypeFn`]: #type-functions
-[`Lt!`]: #lifetime-lists
-[`Lt`]: #lifetime-lists
-[`Provide`]: #providers
-[`ProvideRef`]: #providers
+## Features
+
+### `"alloc"`
+
+Adds the [`ProvideBox`] trait.
+Adds trait implementations for `Rc`, `Box`, and `String`,
+and enables additional provided values for `std` types.
+
+[`define_tag`]: #
 [provide-method]: #providers
+[`Lt`]: #lifetime-lists
+[`Lt!`]: #lifetime-lists
+[`Provide`]: #providers
+[`ProvideBox`]: #
+[`ProvideRef`]: #providers
 [`Query`]: #
+[`ResourceTag`]: #resource-tags
+[`TypeFn`]: #type-functions
+[`TypeFn!`]: #type-functions

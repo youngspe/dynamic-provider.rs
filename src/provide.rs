@@ -12,7 +12,7 @@ use crate::{
 
 /// Provides access to values of arbitrary type.
 ///
-/// Requested values are specified using a [`TypeTag`][crate::TypeTag] implementation, or to be more specific, a [`TagFor<L>`]
+/// Requested values are specified using a [`ResourceTag`][crate::ResourceTag] implementation, or to be more specific, a [`TagFor<L>`]
 /// implementation.
 pub trait Provide<L: Lt = ()>: Sized {
     /// Supplies the requested value to the given [`Query`], if available.
@@ -86,7 +86,7 @@ impl<LTail: Lt, P: ProvideRef<LTail>> ProvideRef<LTail> for &mut Option<P> {
 
 /// Provides access to values of arbitrary type from a reference.
 ///
-/// Requested values are specified using a [`TypeTag`][crate::TypeTag] implementation,
+/// Requested values are specified using a [`ResourceTag`][crate::ResourceTag] implementation,
 /// or to be more specific, a [`TagFor<LTail>`]
 /// implementation.
 ///
@@ -339,6 +339,12 @@ pub struct HasContext<Cx>(Cx);
 pub struct NoContext;
 
 /// Helper function for requesting one of multiple possible values.
+/// See also [`request!`][macro@crate::request] and [`Provide::request()`].
+///
+/// See [`WhenProvider`] information about the methods used to request values.
+///
+/// ## Example
+#[doc = include_str!("./when_provider.md")]
 pub fn when_provider<L: Lt, P: Provide<L>, Out>(provider: P) -> WhenProvider<L, P, NoContext, Out> {
     WhenProvider {
         state: WhenProviderState::Provider {
@@ -349,7 +355,10 @@ pub fn when_provider<L: Lt, P: Provide<L>, Out>(provider: P) -> WhenProvider<L, 
     }
 }
 
-/// Return type of [`when_provider()`]
+/// Return type of [`when_provider()`].
+///
+/// ## Example
+#[doc = include_str!("./when_provider.md")]
 pub struct WhenProvider<L, P, Cx, Out> {
     state: WhenProviderState<P, Cx, Out>,
     _l: PhantomData<L>,

@@ -2,32 +2,38 @@ use crate::{Lt, Provide, ProvideRef, Query};
 use alloc::{boxed::Box, rc::Rc, string::String, sync::Arc};
 
 /// Provides values from a [`Box`].
-pub trait ProvideBox<LTail: Lt = ()> {
-    /// Requests that the inner provided fulfill the query.
+///
+/// Auto-implemented for [`Provide<L>`][Provide] implementations.
+/// In turn, `Provide<L>` is implemented for the following:
+/// - `Box<dyn ProvideBox<L>>`
+/// - `Box<dyn ProvideBox<L> + Send>`
+/// - `Box<dyn ProvideBox<L> + Send + Sync>`
+pub trait ProvideBox<L: Lt = ()> {
+    /// Requests that the inner provider fulfill the query.
     ///
-    /// If the request fails, a `Box<dyn ProvideBox<LTail>` is returned.
+    /// If the request fails, a `Box<dyn ProvideBox<L>>` is returned.
     fn provide_box<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, LTail>,
-    ) -> Option<Box<dyn ProvideBox<LTail> + 'this>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this>>
     where
         Self: 'this;
-    /// Requests that the inner provided fulfill the query.
+    /// Requests that the inner provider fulfill the query.
     ///
-    /// If the request fails, a `Box<dyn ProvideBox<LTail> + Send` is returned.
+    /// If the request fails, a `Box<dyn ProvideBox<L> + Send>` is returned.
     fn provide_box_send<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, LTail>,
-    ) -> Option<Box<dyn ProvideBox<LTail> + 'this + Send>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this + Send>>
     where
         Self: 'this + Send;
-    /// Requests that the inner provided fulfill the query.
+    /// Requests that the inner provider fulfill the query.
     ///
-    /// If the request fails, a `Box<dyn ProvideBox<LTail> + Send + Sync` is returned.
+    /// If the request fails, a `Box<dyn ProvideBox<L> + Send + Sync>` is returned.
     fn provide_box_send_sync<'this>(
         self: Box<Self>,
-        query: &mut Query<'_, LTail>,
-    ) -> Option<Box<dyn ProvideBox<LTail> + 'this + Send + Sync>>
+        query: &mut Query<'_, L>,
+    ) -> Option<Box<dyn ProvideBox<L> + 'this + Send + Sync>>
     where
         Self: 'this + Send + Sync;
 }
@@ -67,6 +73,18 @@ impl<P: Provide<L>, L: Lt> ProvideBox<L> for P {
 impl<'data, L: Lt + 'data> Provide<L> for Box<dyn ProvideBox<L> + 'data> {
     fn provide(self, query: &mut Query<'_, L>) -> Option<Self> {
         self.provide_box(query)
+    }
+}
+
+impl<'data, L: Lt + 'data> Provide<L> for Box<dyn ProvideBox<L> + Send + 'data> {
+    fn provide(self, query: &mut Query<'_, L>) -> Option<Self> {
+        self.provide_box_send(query)
+    }
+}
+
+impl<'data, L: Lt + 'data> Provide<L> for Box<dyn ProvideBox<L> + Send + Sync + 'data> {
+    fn provide(self, query: &mut Query<'_, L>) -> Option<Self> {
+        self.provide_box_send_sync(query)
     }
 }
 
