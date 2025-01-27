@@ -17,11 +17,7 @@ The [`Provide`] and [`ProvideRef`] traits supply values to queries, the latter b
 
 ## Concepts
 
-<details open id="lifetime-lists"><summary>
-
-Lifetime lists
-
-</summary>
+<details open id="lifetime-lists"><summary>Lifetime lists</summary>
 
 Lists of lifetime variables are represented by types implementing [`Lt`].
 You can describe a lifetime list with the [`Lt!`] macro:
@@ -38,11 +34,7 @@ type PrependLifetime<'local, L> = Lt!['local, ..L];
 ```
 
 </details>
-<details open id="type-functions"><summary>
-
-Type functions
-
-</summary>
+<details open id="type-functions"><summary>Type functions</summary>
 
 [`TypeFn`] implementations describe a type that is parameterized over an arbitrary
 lifetime list.
@@ -54,11 +46,7 @@ type RefPair<A, B> = dynamic_provider::TypeFn![for<'a, 'b> (&'a A, &'b B)];
 ```
 
 </details>
-<details open id="resource-tags"><summary>
-
-Resource tags
-
-</summary>
+<details open id="resource-tags"><summary>Resource tags</summary>
 
 [`ResourceTag`] implementations describe how values may be provided to a [`Query`].
 The trait has two associated [`TypeFn`]s: `Arg`, which determines what values are needed to request the resource,
@@ -76,32 +64,18 @@ dynamic_provider::define_tag! {
 ```
 
 </details>
-<details open id="providers"><summary>
-
-Providers
-
-</summary>
-
-<dl><dt>
-
-[`Provide<L>`][`Provide`]
-
-</dt><dd>
+<details open id="providers"><summary>Providers</summary> <dl><dt>[`Provide<L>`][`Provide`]</dt>
+<dd>
 
 Supplies values with the lifetime variables in `L` to the [`Query`] object passed to the
 [`provide()`][provide-method] method.
-
-</dd><dt>
-
-[`ProvideRef<L>`][`ProvideRef`]
-
-</dt><dd>
+</dd><dt>[`ProvideRef<L>`][`ProvideRef`]</dt>
+<dd>****
 
 Supplies values from a reference to `Self` with the lifetime of the reference and the lifetime
 variables in `L`.
 
 A reference to a `Provide` implementation (say, `&'x impl ProvideRef<L>` or `&'x mut impl ProvideRef<L>`) automatically implements `Provide<'x, ..L>` for all `'x`.
-
 </dd></dl>
 </details>
 
