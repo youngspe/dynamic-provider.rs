@@ -17,10 +17,9 @@ The [`Provide`] and [`ProvideRef`] traits supply values to queries, the latter b
 
 ## Concepts
 
-<details open><summary>
+<details open id="lifetime-lists"><summary>
 
-### Lifetime lists
-
+Lifetime lists
 </summary>
 
 Lists of lifetime variables are represented by types implementing [`Lt`].
@@ -38,10 +37,9 @@ type PrependLifetime<'local, L> = Lt!['local, ..L];
 ```
 
 </details>
-<details open><summary>
+<details open id="type-functions"><summary>
 
-### Type functions
-
+Type functions
 </summary>
 
 [`TypeFn`] implementations describe a type that is parameterized over an arbitrary
@@ -54,10 +52,9 @@ type RefPair<A, B> = dynamic_provider::TypeFn![for<'a, 'b> (&'a A, &'b B)];
 ```
 
 </details>
-<details open><summary>
+<details open id="resource-tags"><summary>
 
-### Resource tags
-
+Resource tags
 </summary>
 
 [`ResourceTag`] implementations describe how values may be provided to a [`Query`].
@@ -76,10 +73,9 @@ dynamic_provider::define_tag! {
 ```
 
 </details>
-<details open><summary>
+<details open id="providers"><summary>
 
-### Providers
-
+Providers
 </summary>
 
 <dl><dt>
