@@ -1,6 +1,6 @@
 [package]
 name = "dynamic-provider"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 repository = "https://github.com/youngspe/dynamic-provider.rs"
 authors = ["Spencer Young"]
@@ -12,7 +12,9 @@ rust-version = "1.79"
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 # Enables 'ProvideBox' and impls for Box, Rc, Arc, String
 alloc = []
+

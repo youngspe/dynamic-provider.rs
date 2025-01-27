@@ -13,13 +13,14 @@ The [`Provide`] and [`ProvideRef`] traits supply values to queries, the latter b
 
 - [Rust RFC 3192](https://rust-lang.github.io/rfcs/3192-dyno.html)
   - [implementation](https://github.com/nrc/provide-any) by [@nrc](https://github.com/nrc)
-- [supply](https://crates.io/crates/supply) by [konnorandrews](https://github.com/konnorandrews)
+- [supply](https://crates.io/crates/supply) by [@konnorandrews](https://github.com/konnorandrews)
 
 ## Concepts
 
 <details open id="lifetime-lists"><summary>
 
 Lifetime lists
+
 </summary>
 
 Lists of lifetime variables are represented by types implementing [`Lt`].
@@ -40,6 +41,7 @@ type PrependLifetime<'local, L> = Lt!['local, ..L];
 <details open id="type-functions"><summary>
 
 Type functions
+
 </summary>
 
 [`TypeFn`] implementations describe a type that is parameterized over an arbitrary
@@ -55,6 +57,7 @@ type RefPair<A, B> = dynamic_provider::TypeFn![for<'a, 'b> (&'a A, &'b B)];
 <details open id="resource-tags"><summary>
 
 Resource tags
+
 </summary>
 
 [`ResourceTag`] implementations describe how values may be provided to a [`Query`].
@@ -76,6 +79,7 @@ dynamic_provider::define_tag! {
 <details open id="providers"><summary>
 
 Providers
+
 </summary>
 
 <dl><dt>
@@ -166,14 +170,14 @@ Adds the [`ProvideBox`] trait.
 Adds trait implementations for `Rc`, `Box`, and `String`,
 and enables additional provided values for `std` types.
 
-[`define_tag`]: #
+[`define_tag`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/macro.define_tag.html
 [provide-method]: #providers
-[`Lt`]: #lifetime-lists
-[`Lt!`]: #lifetime-lists
-[`Provide`]: #providers
-[`ProvideBox`]: #
-[`ProvideRef`]: #providers
-[`Query`]: #
-[`ResourceTag`]: #resource-tags
-[`TypeFn`]: #type-functions
-[`TypeFn!`]: #type-functions
+[`Lt`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/trait.Lt.html
+[`Lt!`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/macro.Lt.html
+[`Provide`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/struct.Query.html
+[`ProvideBox`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/trait.ProvideBox.html
+[`ProvideRef`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/trait.ProvideRef.html
+[`Query`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/struct.Query.html
+[`ResourceTag`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/trait.ResourceTag.html
+[`TypeFn`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/trait.TypeFn.html
+[`TypeFn!`]: https://docs.rs/dynamic-provider/latest/dynamic_provider/macro.TypeFn.html
